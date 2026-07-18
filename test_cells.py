@@ -317,6 +317,81 @@ def test_fmt_never_lies():
     assert fmt((5, 5)) == "5"
 
 
+
+
+
+# ----- v1.1: features demanded by real usage (the budget example) -----
+
+def test_sum_forward_and_backward():
+    from constraint_cells import Sum
+    net = Network()
+    total = net.cell("total")
+    a, b, c, d = (net.cell(n) for n in "abcd")
+    Sum(total, [a, b, c, d])
+    a.tell(1, 1, {"r"}); b.tell(2, 2, {"r"}); c.tell(3, 3, {"r"})
+    d.tell(4, 4, {"r"})
+    net.settle()
+    assert approx(total.under({"r"}), 10)
+
+    net = Network()
+    total = net.cell("total")
+    a, b, c, d = (net.cell(n) for n in "abcd")
+    Sum(total, [a, b, c, d])
+    total.tell(10, 10, {"r"})
+    a.tell(1, 1, {"r"}); b.tell(2, 2, {"r"}); d.tell(4, 4, {"r"})
+    net.settle()
+    assert approx(c.under({"r"}), 3)     # solves for the missing term
+
+
+def test_tell_trust_parameter():
+    from constraint_cells import FACT, WISH
+    net = Network()
+    x = net.cell("x")
+    x.tell(1, 1, {"doc"}, trust=FACT)
+    x.tell(0, 5, {"hope"}, trust=WISH)
+    assert net.trust_of("doc") == 3.0
+    assert net.trust_of("hope") == 1.0
+    x.tell(1, 1, {"doc"}, trust=1.5)     # last write wins
+    assert net.trust_of("doc") == 1.5
+
+
+def test_believed_convenience():
+    net = Network()
+    C, F, t = net.cell("C"), net.cell("F"), net.cell("t")
+    Multiplier(C, 1.8, t); Adder(t, net.constant(32), F)
+    C.tell(0, 0, {"h1"})
+    C.tell(100, 100, {"h2"})
+    net.settle()
+    assert net.believed(F) is None       # honest tie
+    net.set_trust("h1", 2.0)
+    assert approx(net.believed(F), 32)   # trust breaks it
+
+
+def test_budget_scenario_with_v11_api():
+    """The full real-world scenario that spec'd v1.1, as a regression test."""
+    from constraint_cells import Sum, FACT, ESTIMATE, WISH
+    net = Network()
+    Income, Rent, Food, Transport, Savings = (
+        net.cell(n) for n in
+        ("Income", "Rent", "Food", "Transport", "Savings"))
+    Sum(Income, [Rent, Food, Transport, Savings])
+    Income.tell(2000, 2000, {"payslip"}, trust=FACT)
+    Rent.tell(800, 800, {"landlord"}, trust=FACT)
+    Transport.tell(150, 150, {"transport_pass"}, trust=FACT)
+    Food.tell(350, 450, {"grocery_history"}, trust=ESTIMATE)
+    Savings.tell(700, 700, {"savings_goal"}, trust=WISH)
+    Food.tell(400, INF, {"honesty"}, trust=ESTIMATE)
+    net.settle()
+    assert net.nogoods, "goal vs honesty conflict must be detected"
+    lo, hi = net.believed(Savings)
+    assert abs(lo - 600) < 1e-6 and abs(hi - 650) < 1e-6
+    # the facts must never be the ones sacrificed
+    ranked = net.believe([Savings])
+    top_camps = ranked[0][2]
+    for w in top_camps:
+        assert {"payslip", "landlord", "transport_pass"} <= w
+
+
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
