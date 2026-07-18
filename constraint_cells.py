@@ -408,4 +408,4 @@ def print_belief(net, label, cells, top=3):
     if tied > 1:
         print("     ^ genuine tie: the network refuses to pretend it knows.")
     return net.winners(ranked)
-      
+  
