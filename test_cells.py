@@ -455,6 +455,41 @@ def test_console_full_session():
     assert c.handle("quit") is False
 
 
+
+# ----- v1.3: incremental propagation -----
+
+def test_incremental_propagation_scales():
+    """Regression for the v1.3 engine upgrade. This exact scenario took
+    7.31s / 857 wake-ups on v1.2 (propagators re-crossed every belief row
+    on every wake-up). Incremental propagation — process only rows added
+    or narrowed since last run, plus queue dedup — must keep it fast, on
+    the SAME answer."""
+    import time as _t
+    net = Network()
+    n_inputs, n_witnesses = 6, 10
+    xs = [net.cell(f"x{i}") for i in range(n_inputs)]
+    prev = xs[0]; sums = []
+    for i in range(1, n_inputs):
+        s = net.cell(f"s{i}"); Adder(prev, xs[i], s)
+        sums.append(s); prev = s
+    for i, x in enumerate(xs):
+        x.tell(10 * i, 10 * i + 4, {f"base{i}"})
+    total = sums[-1]
+    for w in range(n_witnesses):
+        total.tell(w * 0.5,
+                   10 * sum(range(n_inputs)) + 4 * n_inputs - w * 0.5,
+                   {f"w{w}"})
+    t0 = _t.time()
+    steps = net.settle()
+    elapsed = _t.time() - t0
+    world = ({f"base{i}" for i in range(n_inputs)}
+             | {f"w{i}" for i in range(n_witnesses)})
+    lo, hi = total.under(world)
+    assert abs(lo - 150) < 1e-6 and abs(hi - 169.5) < 1e-6  # same answer
+    assert elapsed < 3.0, f"too slow: {elapsed:.2f}s (v1.2 took 7.31s)"
+    assert steps < 100, f"wake-up storm: {steps} (v1.2 took 857)"
+
+
 # ===========================================================================
 # RUNNER — MUST BE THE LAST THING IN THIS FILE.
 # Python executes top-to-bottom: any test defined below this block

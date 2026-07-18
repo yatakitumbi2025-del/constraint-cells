@@ -65,6 +65,33 @@ C.under({"reading"})           # -> (100.0, 100.0)
 All state lives in the `Network` object — any number of independent networks
 can coexist (this is tested).
 
+## What's new in v1.3 — the engine got 100x stronger, the API didn't move
+
+Incremental propagation: propagators now remember what they have already
+processed and act only on belief rows added or *narrowed* since their last
+wake-up, and the scheduler refuses duplicate wake-ups. Measured on the
+frozen benchmark (6-input adder pipeline, 10 interval witnesses):
+
+- v1.2: **7.31 s**, 857 propagator wake-ups
+- v1.3: **0.07 s**, 17 wake-ups — identical answer, bit for bit
+
+Configs the old engine could not touch now run comfortably
+(12 inputs / 20 witnesses: 1.1 s). Every prior test passes unchanged —
+no public signature moved, which is the contract that makes future
+domain packs safe to build on this core.
+
+## What's new in v1.2
+
+The machine can now answer WHY — reasons are retrieved, not generated:
+
+- `cell.explain()` — names which premises set which bound of a believed
+  value, and honestly reports ties between worldviews.
+- `net.retract(p)` / `net.restore(p)` — stop or resume believing a
+  premise; knowledge is filtered, never destroyed.
+- `console.py` — an interactive reasoning console: state facts,
+  estimates, and wishes, then interrogate the network
+  (`why`, `believe`, `conflicts`, `retract`).
+
 ## What's new in v1.1
 
 Every v1.1 feature was demanded by real usage (`examples/06_budget.py`),

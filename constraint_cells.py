@@ -28,7 +28,7 @@ Typical use:
 
 from itertools import combinations
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 
 # Trust categories — the budget example's lesson: a payslip is not a wish.
 FACT, ESTIMATE, WISH = 3.0, 2.0, 1.0
@@ -63,6 +63,7 @@ def fmt(i):
 class Network:
     def __init__(self):
         self.queue = []        # propagators with possibly-new work
+        self._queued = set()   # ids of propagators already in the queue
         self.nogoods = []      # premise sets proven jointly impossible
         self.premises = set()  # every premise used in this network
         self.trust = {}        # premise -> trust score (default 1.0)
@@ -100,16 +101,24 @@ class Network:
 
     # ----- running -----
 
+    def _enqueue(self, p):
+        if id(p) not in self._queued:
+            self._queued.add(id(p))
+            self.queue.append(p)
+
     def settle(self, max_steps=200000):
         steps = 0
         try:
             while self.queue:
-                self.queue.pop(0).run()
+                p = self.queue.pop(0)
+                self._queued.discard(id(p))
+                p.run()
                 steps += 1
                 if steps > max_steps:
                     raise RuntimeError("network did not settle")
         finally:
             self.queue.clear()
+            self._queued.clear()
         return steps
 
     # ----- trust -----
@@ -236,7 +245,8 @@ class Cell:
         if is_empty(new):
             net.record_nogood(S)
             self.beliefs.pop(S, None)
-            net.queue.extend(self.watchers)
+            for p in self.watchers:
+                net._enqueue(p)
             return
         if new == cur:
             return
@@ -250,7 +260,8 @@ class Cell:
                    and new[1] <= I2[1] + 1e-12]:
             del self.beliefs[S2]
         self.beliefs[S] = new
-        net.queue.extend(self.watchers)
+        for p in self.watchers:
+            net._enqueue(p)
 
     def tell(self, lo, hi, supports=frozenset(), trust=None):
         """Learn something under a set of premises. No premises = axiom.
@@ -324,9 +335,19 @@ class _Propagator:
         nets = {c.net for c in cells}
         assert len(nets) == 1, "all cells must belong to the same Network"
         self.net = nets.pop()
+        self._seen = {}        # cell -> {support: interval} last processed
         for c in cells:
             c.watchers.append(self)
-        self.net.queue.append(self)
+        self.net._enqueue(self)
+
+    def _fresh(self, cell):
+        """Rows added or narrowed since this propagator last ran."""
+        seen = self._seen.get(cell, {})
+        return [(S, I) for S, I in cell.beliefs.items() if seen.get(S) != I]
+
+    def _mark(self, *cells):
+        for cell in cells:
+            self._seen[cell] = dict(cell.beliefs)
 
 
 class Adder(_Propagator):
@@ -338,12 +359,21 @@ class Adder(_Propagator):
 
     def run(self):
         a, b, c = self.a, self.b, self.c
-        for x, y, z, f in (
-                (a, b, c, lambda i, j: (i[0] + j[0], i[1] + j[1])),
-                (c, b, a, lambda i, j: (i[0] - j[1], i[1] - j[0])),
-                (c, a, b, lambda i, j: (i[0] - j[1], i[1] - j[0]))):
-            for Sx, Ix in list(x.beliefs.items()):
-                for Sy, Iy in list(y.beliefs.items()):
+        add = lambda i, j: (i[0] + j[0], i[1] + j[1])
+        sub = lambda i, j: (i[0] - j[1], i[1] - j[0])
+        fa, fb, fc = self._fresh(a), self._fresh(b), self._fresh(c)
+        A = list(a.beliefs.items())
+        B = list(b.beliefs.items())
+        C = list(c.beliefs.items())
+        self._mark(a, b, c)
+        # each direction: (fresh x all) plus (all x fresh) — pairs of two
+        # stale rows were already processed on an earlier run.
+        for x_rows, y_rows, z, f in (
+                (fa, B, c, add), (A, fb, c, add),
+                (fc, B, a, sub), (C, fb, a, sub),
+                (fc, A, b, sub), (C, fa, b, sub)):
+            for Sx, Ix in x_rows:
+                for Sy, Iy in y_rows:
                     U = Sx | Sy
                     if self.net.is_bad(U):
                         continue
@@ -361,10 +391,12 @@ class Multiplier(_Propagator):
 
     def run(self):
         a, k, c = self.a, self.k, self.c
-        for S, I in list(a.beliefs.items()):
+        fa, fc = self._fresh(a), self._fresh(c)
+        self._mark(a, c)
+        for S, I in fa:
             if not self.net.is_bad(S):
                 c.tell(I[0] * k, I[1] * k, S)
-        for S, I in list(c.beliefs.items()):
+        for S, I in fc:
             if not self.net.is_bad(S):
                 a.tell(I[0] / k, I[1] / k, S)
 
@@ -378,13 +410,15 @@ class Squarer(_Propagator):
 
     def run(self):
         a, c = self.a, self.c
-        for S, I in list(a.beliefs.items()):
+        fa, fc = self._fresh(a), self._fresh(c)
+        self._mark(a, c)
+        for S, I in fa:
             if self.net.is_bad(S):
                 continue
             lo = max(0.0, I[0])
             hi = I[1] if I[1] != INF else INF
             c.tell(lo * lo, hi * hi if hi != INF else INF, S)
-        for S, I in list(c.beliefs.items()):
+        for S, I in fc:
             if self.net.is_bad(S):
                 continue
             lo = max(0.0, I[0]) ** 0.5
@@ -420,10 +454,12 @@ class LawAdder(_Propagator):
 
     def run(self):
         nm = frozenset([self.name])
-        for S, I in list(self.src.beliefs.items()):
+        fs, fd = self._fresh(self.src), self._fresh(self.dst)
+        self._mark(self.src, self.dst)
+        for S, I in fs:
             if not self.net.is_bad(S | nm):
                 self.dst.tell(I[0] + self.k, I[1] + self.k, S | nm)
-        for S, I in list(self.dst.beliefs.items()):
+        for S, I in fd:
             if not self.net.is_bad(S | nm):
                 self.src.tell(I[0] - self.k, I[1] - self.k, S | nm)
 

@@ -22,4 +22,3 @@ winners = print_belief(net, "gina (2.5) reports E=51:", [C, D, E])
 print("experience reshapes trust:")
 for p, old, new in net.experience_update(winners):
     print(f"  trust[{p}]: {old} -> {new}")
-  

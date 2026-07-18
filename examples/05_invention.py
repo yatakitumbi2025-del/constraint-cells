@@ -27,4 +27,3 @@ ep.settle()
 winners = print_belief(ep, "reality disagrees with the law:", [P, T])
 ep.experience_update(winners)
 print(f"law demoted by experience: trust now {memory.trust_of(law)}")
-

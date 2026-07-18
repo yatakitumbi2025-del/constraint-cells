@@ -16,4 +16,3 @@ for ng in net.nogoods:
 print("surviving camps:")
 for w in net.rival_camps():
     print(" ", sorted(w))
-  

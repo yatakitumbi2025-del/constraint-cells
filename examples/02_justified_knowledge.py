@@ -14,4 +14,3 @@ print("C believing both:        ", fmt(C.under({"weather_report", "my_thermomete
 print("C if thermometer broken: ", fmt(C.under({"weather_report"})))
 print("C if weather report fake:", fmt(C.under({"my_thermometer"})))
 print("conflicts:", [sorted(ng) for ng in net.nogoods] or "none — they cooperate")
-
