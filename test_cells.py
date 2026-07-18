@@ -392,8 +392,73 @@ def test_budget_scenario_with_v11_api():
         assert {"payslip", "landlord", "transport_pass"} <= w
 
 
-# ---------------------------------------------------------------------------
 
+
+
+# ----- v1.2: explain(), retraction, and the console -----
+
+def test_explain_names_binding_premises():
+    net = Network()
+    C, F, t = net.cell("C"), net.cell("F"), net.cell("t")
+    Multiplier(C, 1.8, t); Adder(t, net.constant(32), F)
+    C.tell(0, 40, {"weather"})
+    F.tell(100, 100, {"thermo"})
+    net.settle()
+    text = C.explain({"weather", "thermo"})
+    assert "37.77" in text
+    assert "thermo" in text          # the binding premise is named
+
+
+def test_explain_admits_ties():
+    net = Network()
+    C, F, t = net.cell("C"), net.cell("F"), net.cell("t")
+    Multiplier(C, 1.8, t); Adder(t, net.constant(32), F)
+    C.tell(0, 0, {"h1"})
+    C.tell(100, 100, {"h2"})
+    net.settle()
+    assert "TIE" in F.explain()
+
+
+def test_retract_and_restore():
+    net = Network()
+    C, F, t = net.cell("C"), net.cell("F"), net.cell("t")
+    Multiplier(C, 1.8, t); Adder(t, net.constant(32), F)
+    C.tell(0, 0, {"h1"})
+    C.tell(100, 100, {"h2"})
+    net.settle()
+    assert net.believed(F) is None            # tie
+    net.retract("h2")
+    assert approx(net.believed(F), 32)        # h1's world, instantly
+    net.restore("h2"); net.retract("h1")
+    assert approx(net.believed(F), 212)       # h2's world, no recompute
+
+
+def test_console_full_session():
+    from console import Console
+    c = Console()
+    script = [
+        "cell Income Rent Food Transport Savings",
+        "sum Income = Rent + Food + Transport + Savings",
+        "fact payslip: Income = 2000",
+        "fact landlord: Rent = 800",
+        "fact transport_pass: Transport = 150",
+        "estimate groceries: Food = 350..450",
+        "wish goal: Savings = 700",
+        "estimate honesty: Food = 400..",
+    ]
+    for line in script:
+        assert c.handle(line) is True
+    assert c.net.nogoods                      # conflict detected
+    lo, hi = c.net.believed(c.cells["Savings"])
+    assert hi <= 650 + 1e-6                   # goal loses to facts
+    assert "Savings" in c.cells["Savings"].explain()
+    assert c.handle("quit") is False
+
+
+# ===========================================================================
+# RUNNER — MUST BE THE LAST THING IN THIS FILE.
+# Python executes top-to-bottom: any test defined below this block
+# will silently never run (this bit us twice). Add new tests ABOVE.
 if __name__ == "__main__":
     import sys
     tests = [(n, f) for n, f in sorted(globals().items())

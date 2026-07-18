@@ -28,7 +28,7 @@ Typical use:
 
 from itertools import combinations
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 # Trust categories — the budget example's lesson: a payslip is not a wish.
 FACT, ESTIMATE, WISH = 3.0, 2.0, 1.0
@@ -67,6 +67,7 @@ class Network:
         self.premises = set()  # every premise used in this network
         self.trust = {}        # premise -> trust score (default 1.0)
         self.laws = []         # structure the machine has induced
+        self.retracted = set() # premises currently not believed
 
     # ----- construction -----
 
@@ -121,9 +122,16 @@ class Network:
 
     # ----- worldviews and choice -----
 
+    def retract(self, p):
+        """Stop believing a premise. Its knowledge is filtered, not destroyed."""
+        self.retracted.add(p)
+
+    def restore(self, p):
+        self.retracted.discard(p)
+
     def rival_camps(self):
         """All maximal premise sets that survive every known conflict."""
-        ps = sorted(self.premises)
+        ps = sorted(self.premises - self.retracted)
         camps = []
         for r in range(len(ps), 0, -1):
             for combo in combinations(ps, r):
@@ -265,6 +273,40 @@ class Cell:
             if S <= premises and not self.net.is_bad(S):
                 result = intersect(result, I)
         return result
+
+    def explain(self, premises=None):
+        """WHY do I believe what I believe? Returns a readable account.
+        With premises=None, explains the winning worldview's value."""
+        if premises is None:
+            ranked = self.net.believe([self])
+            w = self.net.winners(ranked)
+            if w is None:
+                lines = [f"{self.name}: GENUINE TIE between worldviews:"]
+                top = ranked[0][0]
+                for s, key, camps in ranked:
+                    if abs(s - top) > 1e-9: break
+                    for c in camps:
+                        lines.append(f"  {self.name} = {key[0]} if you side "
+                                     f"with {sorted(c)} (trust {round(s,2)})")
+                return "\n".join(lines)
+            premises = w
+        premises = frozenset(premises)
+        final = self.under(premises)
+        lines = [f"{self.name} = {fmt(final)}"]
+        rows = [(S, I) for S, I in sorted(self.beliefs.items(),
+                                          key=lambda x: len(x[0]))
+                if S <= premises and not self.net.is_bad(S)]
+        for S, I in rows:
+            binding = []
+            if abs(I[0] - final[0]) < 1e-9 and I[0] != -INF:
+                binding.append("sets lower bound")
+            if abs(I[1] - final[1]) < 1e-9 and I[1] != INF:
+                binding.append("sets upper bound")
+            if binding:
+                src_txt = ", ".join(sorted(S)) if S else "axioms"
+                lines.append(f"  {fmt(I)} because of [{src_txt}]"
+                             f"  ({' + '.join(binding)})")
+        return "\n".join(lines)
 
     def rows(self):
         return len(self.beliefs)
