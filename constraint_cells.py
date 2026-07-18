@@ -28,7 +28,10 @@ Typical use:
 
 from itertools import combinations
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
+
+# Trust categories — the budget example's lesson: a payslip is not a wish.
+FACT, ESTIMATE, WISH = 3.0, 2.0, 1.0
 
 INF = float("inf")
 _EPS = 1e-9
@@ -160,6 +163,13 @@ class Network:
             out |= w
         return out
 
+    def believed(self, cell):
+        """The cell's value under the winning worldview,
+        or None on a genuine tie."""
+        ranked = self.believe([cell])
+        w = self.winners(ranked)
+        return None if w is None else cell.under(w)
+
     def experience_update(self, winners, gain=1.05, loss=0.80):
         """Outcomes reshape trust. Returns [(premise, old, new)].
         A tie (winners=None) teaches nothing and changes nothing."""
@@ -234,10 +244,15 @@ class Cell:
         self.beliefs[S] = new
         net.queue.extend(self.watchers)
 
-    def tell(self, lo, hi, supports=frozenset()):
-        """Learn something under a set of premises. No premises = axiom."""
+    def tell(self, lo, hi, supports=frozenset(), trust=None):
+        """Learn something under a set of premises. No premises = axiom.
+        trust= sets the trust of every premise in supports (last write wins);
+        use the FACT / ESTIMATE / WISH constants or any number."""
         S = frozenset(supports)
         self.net.premises.update(S)
+        if trust is not None:
+            for p in S:
+                self.net.trust[p] = trust
         for S2, I2 in list(self.beliefs.items()):
             self._add(S | S2, intersect(I2, (lo, hi)))
         self._add(S, (lo, hi))
@@ -335,6 +350,23 @@ class Squarer(_Propagator):
             a.tell(lo, hi, S)
 
 
+class Sum:
+    """total = term1 + term2 + ... — sugar that builds a hidden chain of
+    pairwise Adders. No new propagation math: reuses the tested primitive,
+    so every Adder guarantee (bidirectionality, justification flow,
+    minimal nogoods) holds automatically."""
+
+    def __init__(self, total, terms):
+        assert len(terms) >= 2, "Sum needs at least two terms"
+        net = total.net
+        acc = terms[0]
+        for i, term in enumerate(terms[1:-1], 1):
+            hidden = net.cell(f"_{total.name}:partial{i}")
+            Adder(acc, term, hidden)
+            acc = hidden
+        Adder(acc, terms[-1], total)
+
+
 class LawAdder(_Propagator):
     """dst = src + k — a propagator the MACHINE installed, believed only
     under the law's own premise."""
@@ -376,3 +408,4 @@ def print_belief(net, label, cells, top=3):
     if tied > 1:
         print("     ^ genuine tie: the network refuses to pretend it knows.")
     return net.winners(ranked)
+      
