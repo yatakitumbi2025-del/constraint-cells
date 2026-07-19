@@ -65,6 +65,28 @@ C.under({"reading"})           # -> (100.0, 100.0)
 All state lives in the `Network` object — any number of independent networks
 can coexist (this is tested).
 
+## What's new in v1.4 — the pack-author contract
+
+Every item was demanded by Domain Pack #1 (`packs/tactics.py`), which was
+deliberately built BEFORE this release so the kernel's next features would
+be discovered, not guessed:
+
+- **Public `Propagator` base** — subclass it, use `fresh(cell)` / `mark()`,
+  implement `run()`. This interface is covered by tests and will not move;
+  it is the contract that makes packs safe to build. (`_Propagator` remains
+  as a compatibility alias.)
+- **`Max` / `Min` propagators** — full multi-directional interval semantics,
+  including the inference "if the other input provably can't reach the
+  maximum, this one must supply it".
+- **`Clamp(x, lo, hi, out)`** — sugar over Max+Min, for quantities with hard
+  floors and ceilings (the pack's HP that shouldn't go below 0).
+- Deliberately deferred: conditional termination (planning stops in futures
+  where the game already ended) — research-sized, kept on the roadmap.
+
+The tactics pack now runs on the public API with byte-identical output.
+One behavior change per release: the pack's score-function fix (it
+currently turtles — see its test's docstring) ships separately, next.
+
 ## What's new in v1.3 — the engine got 100x stronger, the API didn't move
 
 Incremental propagation: propagators now remember what they have already

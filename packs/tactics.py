@@ -14,22 +14,21 @@ What this pack adds ON TOP of the kernel (which is untouched):
   - a maximin brain: choose the plan with the best worst-case future
   - explainable tactics: every recommendation traces to premises
 
-KERNEL DEMANDS DISCOVERED WHILE WRITING THIS (the v1.4 spec, as predicted):
-  1. The pack must subclass the underscore-private `_Propagator` —
-     the kernel needs a public Propagator base for pack authors.
-  2. HP should cap at 0 and at max — needs Max/Min propagators.
-     (v1 of this pack lives with uncapped HP; "HP = [-6..0]" reads as
-     "possibly dead", which is honest if ugly.)
-  3. No conditional termination: turn 2 is planned even in futures where
-     the foe is already dead at turn 1. Needs if-then machinery someday.
+KERNEL DEMANDS THIS PACK DISCOVERED — and their status:
+  1. Public Propagator base ............ SHIPPED in v1.4 (used below)
+  2. Max/Min for HP caps ............... SHIPPED in v1.4 (pack adopts them
+     in its next revision, together with the score-function fix — one
+     behavior change per release)
+  3. Conditional termination ........... DEFERRED (research-sized; futures
+     where the foe died at turn 1 still get a turn 2 planned)
 """
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from itertools import product
-from constraint_cells import Network, fmt, INF, _Propagator
+from constraint_cells import Network, fmt, INF, Propagator
 
 
-class Effect(_Propagator):
+class Effect(Propagator):
     """dst = src + [dlo, dhi], but ONLY in worlds where all the given
     action premises hold. The pack's one new propagator — same pattern
     as the kernel's LawAdder: stamp the premises onto everything."""
@@ -43,8 +42,8 @@ class Effect(_Propagator):
 
     def run(self):
         P = self.premises
-        fs, fd = self._fresh(self.src), self._fresh(self.dst)
-        self._mark(self.src, self.dst)
+        fs, fd = self.fresh(self.src), self.fresh(self.dst)
+        self.mark(self.src, self.dst)
         for S, I in fs:
             if not self.net.is_bad(S | P):
                 self.dst.tell(I[0] + self.dlo, I[1] + self.dhi, S | P)

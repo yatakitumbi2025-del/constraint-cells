@@ -28,7 +28,7 @@ Typical use:
 
 from itertools import combinations
 
-__version__ = "1.3.0"
+__version__ = "1.4.0"
 
 # Trust categories — the budget example's lesson: a payslip is not a wish.
 FACT, ESTIMATE, WISH = 3.0, 2.0, 1.0
@@ -330,7 +330,20 @@ class Cell:
 # Propagators: dumb local rules, knowledge flows in every direction
 # ---------------------------------------------------------------------------
 
-class _Propagator:
+class Propagator:
+    """PUBLIC base class for propagators — the pack-author contract.
+
+    Subclass this, call super().__init__(*cells) with every cell you watch,
+    and implement run(). Inside run(), the incremental-propagation pattern:
+
+        fresh_rows = self.fresh(cell)   # rows added/narrowed since last run
+        ...                             # snapshot everything you need
+        self.mark(cell_a, cell_b)       # then record what you have seen
+        ...                             # then tell() based on fresh rows
+
+    This interface is covered by tests; kernel refactors will not move it.
+    """
+
     def __init__(self, *cells):
         nets = {c.net for c in cells}
         assert len(nets) == 1, "all cells must belong to the same Network"
@@ -340,17 +353,24 @@ class _Propagator:
             c.watchers.append(self)
         self.net._enqueue(self)
 
-    def _fresh(self, cell):
+    def fresh(self, cell):
         """Rows added or narrowed since this propagator last ran."""
         seen = self._seen.get(cell, {})
         return [(S, I) for S, I in cell.beliefs.items() if seen.get(S) != I]
 
-    def _mark(self, *cells):
+    def mark(self, *cells):
         for cell in cells:
             self._seen[cell] = dict(cell.beliefs)
 
+    # backward-compatible private aliases (pre-1.4 packs)
+    _fresh = fresh
+    _mark = mark
 
-class Adder(_Propagator):
+
+_Propagator = Propagator   # backward-compatible name
+
+
+class Adder(Propagator):
     """a + b = c, in all directions, per premise-combination."""
 
     def __init__(self, a, b, c):
@@ -361,11 +381,11 @@ class Adder(_Propagator):
         a, b, c = self.a, self.b, self.c
         add = lambda i, j: (i[0] + j[0], i[1] + j[1])
         sub = lambda i, j: (i[0] - j[1], i[1] - j[0])
-        fa, fb, fc = self._fresh(a), self._fresh(b), self._fresh(c)
+        fa, fb, fc = self.fresh(a), self.fresh(b), self.fresh(c)
         A = list(a.beliefs.items())
         B = list(b.beliefs.items())
         C = list(c.beliefs.items())
-        self._mark(a, b, c)
+        self.mark(a, b, c)
         # each direction: (fresh x all) plus (all x fresh) — pairs of two
         # stale rows were already processed on an earlier run.
         for x_rows, y_rows, z, f in (
@@ -381,7 +401,7 @@ class Adder(_Propagator):
                     z.tell(lo, hi, U)
 
 
-class Multiplier(_Propagator):
+class Multiplier(Propagator):
     """a * k = c for a positive constant k."""
 
     def __init__(self, a, k, c):
@@ -391,8 +411,8 @@ class Multiplier(_Propagator):
 
     def run(self):
         a, k, c = self.a, self.k, self.c
-        fa, fc = self._fresh(a), self._fresh(c)
-        self._mark(a, c)
+        fa, fc = self.fresh(a), self.fresh(c)
+        self.mark(a, c)
         for S, I in fa:
             if not self.net.is_bad(S):
                 c.tell(I[0] * k, I[1] * k, S)
@@ -401,7 +421,7 @@ class Multiplier(_Propagator):
                 a.tell(I[0] / k, I[1] / k, S)
 
 
-class Squarer(_Propagator):
+class Squarer(Propagator):
     """a * a = c, assuming a >= 0. 'Unknown' is [0, inf), not wildly negative."""
 
     def __init__(self, a, c):
@@ -410,8 +430,8 @@ class Squarer(_Propagator):
 
     def run(self):
         a, c = self.a, self.c
-        fa, fc = self._fresh(a), self._fresh(c)
-        self._mark(a, c)
+        fa, fc = self.fresh(a), self.fresh(c)
+        self.mark(a, c)
         for S, I in fa:
             if self.net.is_bad(S):
                 continue
@@ -443,7 +463,82 @@ class Sum:
         Adder(acc, terms[-1], total)
 
 
-class LawAdder(_Propagator):
+class Max(Propagator):
+    """c = max(a, b), in all directions, per premise-combination.
+    Backward rule: an input can never exceed c; and if the OTHER input
+    provably cannot reach c's lower bound, this input must supply it."""
+
+    def __init__(self, a, b, c):
+        super().__init__(a, b, c)
+        self.a, self.b, self.c = a, b, c
+
+    def run(self):
+        fwd = lambda i, j: (max(i[0], j[0]), max(i[1], j[1]))
+
+        def back(ci, oj):          # bound one input, given c and the other
+            lo = ci[0] if oj[1] < ci[0] - 1e-12 else -INF
+            return (lo, ci[1])
+
+        a, b, c = self.a, self.b, self.c
+        fa, fb, fc = self.fresh(a), self.fresh(b), self.fresh(c)
+        A, B, C = (list(a.beliefs.items()), list(b.beliefs.items()),
+                   list(c.beliefs.items()))
+        self.mark(a, b, c)
+        for x_rows, y_rows, z, f in (
+                (fa, B, c, fwd), (A, fb, c, fwd),
+                (fc, B, a, back), (C, fb, a, back),
+                (fc, A, b, back), (C, fa, b, back)):
+            for Sx, Ix in x_rows:
+                for Sy, Iy in y_rows:
+                    U = Sx | Sy
+                    if self.net.is_bad(U):
+                        continue
+                    lo, hi = f(Ix, Iy)
+                    z.tell(lo, hi, U)
+
+
+class Min(Propagator):
+    """c = min(a, b) — the mirror image of Max."""
+
+    def __init__(self, a, b, c):
+        super().__init__(a, b, c)
+        self.a, self.b, self.c = a, b, c
+
+    def run(self):
+        fwd = lambda i, j: (min(i[0], j[0]), min(i[1], j[1]))
+
+        def back(ci, oj):
+            hi = ci[1] if oj[0] > ci[1] + 1e-12 else INF
+            return (ci[0], hi)
+
+        a, b, c = self.a, self.b, self.c
+        fa, fb, fc = self.fresh(a), self.fresh(b), self.fresh(c)
+        A, B, C = (list(a.beliefs.items()), list(b.beliefs.items()),
+                   list(c.beliefs.items()))
+        self.mark(a, b, c)
+        for x_rows, y_rows, z, f in (
+                (fa, B, c, fwd), (A, fb, c, fwd),
+                (fc, B, a, back), (C, fb, a, back),
+                (fc, A, b, back), (C, fa, b, back)):
+            for Sx, Ix in x_rows:
+                for Sy, Iy in y_rows:
+                    U = Sx | Sy
+                    if self.net.is_bad(U):
+                        continue
+                    lo, hi = f(Ix, Iy)
+                    z.tell(lo, hi, U)
+
+
+def Clamp(x, lo, hi, out):
+    """out = x clamped into [lo, hi] — sugar over Max and Min, per the
+    sugar principle: composition of tested primitives, no new math."""
+    net = x.net
+    t = net.cell(f"_{out.name}:clamped_lo")
+    Max(x, net.constant(lo), t)
+    Min(t, net.constant(hi), out)
+
+
+class LawAdder(Propagator):
     """dst = src + k — a propagator the MACHINE installed, believed only
     under the law's own premise."""
 
@@ -454,8 +549,8 @@ class LawAdder(_Propagator):
 
     def run(self):
         nm = frozenset([self.name])
-        fs, fd = self._fresh(self.src), self._fresh(self.dst)
-        self._mark(self.src, self.dst)
+        fs, fd = self.fresh(self.src), self.fresh(self.dst)
+        self.mark(self.src, self.dst)
         for S, I in fs:
             if not self.net.is_bad(S | nm):
                 self.dst.tell(I[0] + self.k, I[1] + self.k, S | nm)

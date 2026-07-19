@@ -516,6 +516,78 @@ def test_tactics_pack_duel():
     assert abs(lo + 9) < 1e-9 and abs(hi - 1) < 1e-9   # foe in [-9 .. 1]
 
 
+
+# ----- v1.4: the pack-author contract, demanded by Domain Pack #1 -----
+
+def test_public_propagator_base():
+    """A pack-style custom propagator built ONLY on the public API:
+    Propagator, fresh(), mark(). This is the contract packs rely on."""
+    from constraint_cells import Propagator, _Propagator
+    assert _Propagator is Propagator          # pre-1.4 packs keep working
+
+    class Doubler(Propagator):                # dst = 2 * src
+        def __init__(self, src, dst):
+            super().__init__(src, dst)
+            self.src, self.dst = src, dst
+
+        def run(self):
+            fs = self.fresh(self.src)
+            self.mark(self.src, self.dst)
+            for S, I in fs:
+                if not self.net.is_bad(S):
+                    self.dst.tell(I[0] * 2, I[1] * 2, S)
+
+    net = Network()
+    x, y = net.cell("x"), net.cell("y")
+    Doubler(x, y)
+    x.tell(3, 5, {"r"})
+    net.settle()
+    lo, hi = y.under({"r"})
+    assert abs(lo - 6) < 1e-9 and abs(hi - 10) < 1e-9
+
+
+def test_max_min_all_directions():
+    from constraint_cells import Max, Min
+    net = Network()
+    a, b, c = net.cell("a"), net.cell("b"), net.cell("c")
+    Max(a, b, c)
+    a.tell(1, 2, {"r"}); b.tell(5, 6, {"r"})
+    net.settle()
+    lo, hi = c.under({"r"})
+    assert abs(lo - 5) < 1e-9 and abs(hi - 6) < 1e-9   # forward
+
+    net = Network()
+    a, b, c = net.cell("a"), net.cell("b"), net.cell("c")
+    Max(a, b, c)
+    c.tell(7, 7, {"r"}); b.tell(0, 3, {"r"})
+    net.settle()
+    lo, hi = a.under({"r"})
+    assert abs(lo - 7) < 1e-9 and abs(hi - 7) < 1e-9   # backward: b can't
+                                                       # reach 7, so a must
+    net = Network()
+    a, b, c = net.cell("a"), net.cell("b"), net.cell("c")
+    Min(a, b, c)
+    c.tell(0, 0, {"r"}); b.tell(4, 5, {"r"})
+    net.settle()
+    lo, hi = a.under({"r"})
+    assert abs(lo) < 1e-9 and abs(hi) < 1e-9           # Min mirror
+
+
+def test_clamp():
+    """The HP-cap machinery the tactics pack demanded."""
+    from constraint_cells import Clamp
+    for (xlo, xhi), (elo, ehi) in [((-6, 15), (0, 12)),
+                                   ((-6, 0), (0, 0)),
+                                   ((3, 5), (3, 5))]:
+        net = Network()
+        x, out = net.cell("x"), net.cell("hp")
+        Clamp(x, 0, 12, out)
+        x.tell(xlo, xhi, {"r"})
+        net.settle()
+        lo, hi = out.under({"r"})
+        assert abs(lo - elo) < 1e-9 and abs(hi - ehi) < 1e-9, (xlo, xhi, lo, hi)
+
+
 # ===========================================================================
 # RUNNER — MUST BE THE LAST THING IN THIS FILE.
 # Python executes top-to-bottom: any test defined below this block
