@@ -490,6 +490,32 @@ def test_incremental_propagation_scales():
     assert steps < 100, f"wake-up storm: {steps} (v1.2 took 857)"
 
 
+
+# ----- Domain Pack #1: tactics (adversarial lookahead) -----
+
+def test_tactics_pack_duel():
+    """The pack runs on the UNTOUCHED kernel: time as per-turn cells,
+    actions as premises, an Effect propagator, exclusivity as nogoods,
+    and a maximin brain. Locks in the pack's first honest finding: pure
+    maximin with a 2-turn horizon chooses to turtle (defend+defend) —
+    the score function encodes cowardice, not the engine."""
+    from packs.tactics import build_duel, plan, world_for
+    net, me, foe = build_duel()
+    best, reply, _ = plan(net, me, foe)
+    assert best == ("defend", "defend")
+    assert reply == ("attack", "attack")
+    lo, hi = me[2].under(world_for(best, reply))
+    assert abs(lo - 6) < 1e-9 and abs(hi - 10) < 1e-9
+
+    # action exclusivity: a world with two of my actions in one turn is dead
+    assert net.is_bad(frozenset({"me_t1:attack", "me_t1:defend"}))
+
+    # hand-checkable future: mutual aggression both turns
+    lo, hi = foe[2].under(world_for(("attack", "attack"),
+                                    ("attack", "attack")))
+    assert abs(lo + 9) < 1e-9 and abs(hi - 1) < 1e-9   # foe in [-9 .. 1]
+
+
 # ===========================================================================
 # RUNNER — MUST BE THE LAST THING IN THIS FILE.
 # Python executes top-to-bottom: any test defined below this block
